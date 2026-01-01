@@ -1,4 +1,4 @@
-from utils.llm import query_gemini
+from utils.llm import query_stage
 import json
 
 def stage7_paper_generation(synthesis, knowledge_base, topic, feedback=""):
@@ -57,6 +57,6 @@ def stage7_paper_generation(synthesis, knowledge_base, topic, feedback=""):
     Return ONLY the completed research paper in Markdown format.
     """
     
-    # Heavy content generation: Try Gemini, then fail directly to offline to save Groq limit
-    paper = query_gemini(prompt, fallback_to_others=False)
+    # Heavy content generation using 'generation' stage strategy
+    paper = query_stage("generation", prompt)
     return paper

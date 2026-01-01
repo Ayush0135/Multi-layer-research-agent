@@ -1,37 +1,37 @@
 import os
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+import ollama
+from dotenv import load_dotenv
 
-# Enable high-performance download for HuggingFace
-os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
+load_dotenv()
 
-# Model Configuration
-# Using Qwen2.5-0.5B-Instruct as it is very small (~1GB) and capable
-MODEL_ID = "Qwen/Qwen2.5-0.5B-Instruct"
+# Configuration for Ollama
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
 
-def setup_offline_model():
-    print(f"Starting download for offline model: {MODEL_ID}")
-    print("This may take a few minutes depending on your internet connection.")
+def setup_ollama():
+    print(f"Checking for Ollama model: {OLLAMA_MODEL}...")
     
     try:
-        # Download Tokenizer
-        print("Downloading tokenizer...")
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, trust_remote_code=True)
+        # Check if model exists
+        models = ollama.list()
+        model_names = [m['name'] for m in models['models']]
         
-        # Download Model
-        print("Downloading model weights...")
-        model = AutoModelForCausalLM.from_pretrained(
-            MODEL_ID,
-            torch_dtype=torch.float16 if torch.cuda.is_available() or torch.backends.mps.is_available() else torch.float32,
-            trust_remote_code=True
-        )
+        # Ollama names can have :latest suffix or not
+        if OLLAMA_MODEL in model_names or f"{OLLAMA_MODEL}:latest" in model_names:
+            print(f"Model '{OLLAMA_MODEL}' is already available.")
+            return
+
+        print(f"Pulling model '{OLLAMA_MODEL}' from Ollama registry...")
+        print("This may take some time depending on your connection.")
         
-        print(f"\nSuccessfully downloaded and verified {MODEL_ID}!")
-        print("You can now run the research agent with offline capabilities.")
+        # Use pull with progress if possible, but simple pull is fine for a script
+        ollama.pull(OLLAMA_MODEL)
+        
+        print(f"\nSuccessfully pulled {OLLAMA_MODEL}!")
+        print("You can now run the research agent with Ollama.")
         
     except Exception as e:
-        print(f"\nError during download: {str(e)}")
-        print("Please check your internet connection or disk space.")
+        print(f"\nError using Ollama: {str(e)}")
+        print("Ensure Ollama is installed and running (visit https://ollama.com).")
 
 if __name__ == "__main__":
-    setup_offline_model()
+    setup_ollama()

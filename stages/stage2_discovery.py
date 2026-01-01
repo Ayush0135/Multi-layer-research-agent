@@ -18,6 +18,17 @@ def process_search_item(item):
         # Silent skip or log if needed
         return None
 
+    # Efficiency: Relevance Check
+    # Check if keywords from subtopic exist in title or snippet
+    subtopic_name = item.get('subtopic', '')
+    if subtopic_name:
+        # keywords > 3 chars to avoid 'the', 'and', 'for'
+        keywords = [k.lower() for k in subtopic_name.split() if len(k) > 3]
+        text_to_check = (title + " " + snippet).lower()
+        if keywords and not any(k in text_to_check for k in keywords):
+             # print(f"  [Skip] Irrelevant snippet for {subtopic_name}: {title}")
+             return None
+
     try:
         raw_text = download_and_parse(url)
         if len(raw_text) < 500: # Too short to be a paper
@@ -44,29 +55,49 @@ def stage2_document_discovery(decomposition_data):
         print("Invalid input for Stage 2")
         return []
 
-    # 1. Gather all candidates first
+    # 1. Gather all candidates concurrently
+    def execute_search_query(subtopic, query):
+        results = []
+        # Enforce academic constraints in query
+        academic_query = f"{query} filetype:pdf OR site:.edu OR site:.org \"research paper\""
+        print(f"  [Search] Querying: {academic_query}")
+        
+        try:
+            # Small random delay to stagger requests slightly
+            time.sleep(0.1) 
+            search_res = google_search(academic_query, num_results=6) # Reduced from 8 to 6 for speed
+            for item in search_res:
+                item['subtopic'] = subtopic['name']
+                results.append(item)
+        except Exception as e:
+            print(f"    Error querying Google for '{query}': {e}")
+        return results
+
+    # Flatten all queries
+    all_queries = []
     for subtopic in decomposition_data['subtopics']:
-        print(f"Searching for subtopic: {subtopic['name']}")
         for query in subtopic['search_queries']:
-            # Enforce academic constraints in query
-            academic_query = f"{query} filetype:pdf OR site:.edu OR site:.org \"research paper\""
-            print(f"  Querying: {academic_query}")
-            
-            try:
-                # Small delay to respect Google API rate limits
-                time.sleep(0.5)
-                results = google_search(academic_query, num_results=3)
-                
-                for item in results:
-                    url = item.get('link')
-                    if url in seen_urls:
-                        continue
-                    seen_urls.add(url)
-                    
-                    print(f"    Found candidate: {item.get('title')[:50]}... ({url})")
-                    search_candidates.append(item)
-            except Exception as e:
-                print(f"    Error querying Google: {e}")
+            all_queries.append((subtopic, query))
+
+    print(f"Executing {len(all_queries)} search queries in parallel...")
+    
+    with ThreadPoolExecutor(max_workers=5) as search_executor:
+        future_to_query = {search_executor.submit(execute_search_query, s, q): (s, q) for s, q in all_queries}
+        
+        for future in as_completed(future_to_query):
+            results = future.result()
+            for item in results:
+                url = item.get('link')
+                if url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                # print(f"    Found: {item.get('title')[:40]}...")
+                search_candidates.append(item)
+
+    # Limit to top 20 candidates total (User Constraint)
+    if len(search_candidates) > 20:
+        print(f"Limiting candidates from {len(search_candidates)} to top 20.")
+        search_candidates = search_candidates[:20]
 
     print(f"\nDownloading and parsing {len(search_candidates)} candidates in parallel...")
 

@@ -19,7 +19,7 @@ Key differentiator: It features a **Self-Correction Loop**. Stage 8 (Review) act
 *   **Multi-Stage Architecture**: Deconstructs the complexity of research into 8 manageable, specialized stages.
 *   **Hybrid LLM Engine**:
     *   **Cloud Prioritized**: Uses **Gemini 1.5 Pro** and **Groq (Llama 3 70B)** for speed and high context.
-    *   **Offline Fallback**: Fully capable of running completely offline using local models via Hugging Face Transformers (requires GPU).
+    *   **Local Prioritized**: Fully capable of running completely locally using **Ollama** as a fallback or primary engine.
 *   **Real-Time Internet Research**: Integrates with **Google Programmable Search Engine** to find recognized academic sources.
 *   **Academic Scoring System**: Automatically evaluates sources based on relevance, credibility, and citationworthiness.
 *   **Auto-Iterative Improvement**: The agent crtiques its own work and improves it iteratively before final output.
@@ -69,11 +69,12 @@ GOOGLE_API_KEY=your_google_custom_search_api_key
 GOOGLE_CSE_ID=your_search_engine_id
 ```
 
-### 4. (Optional) Setup Offline Models
-If you plan to run without API keys or as a fallback:
+### 4. Setup Local Models (Ollama)
+Ensure Ollama is installed from [ollama.com](https://ollama.com) and running. Then pull your preferred model:
 ```bash
 python setup_offline.py
 ```
+*(Defaults to llama3.2)*
 
 ---
 
@@ -117,8 +118,8 @@ The agent will print its progress through the stages. Upon success, the final pa
 └── README.md
 ```
 
-## ⚠️ Note on Offline Mode
-Offline mode requires significant RAM/VRAM. By default, it attempts to use `HuggingFaceTB/SmolLM2-1.7B-Instruct` or similar lightweight models. Edit `utils/llm_offline.py` to change the target model.
+## ⚠️ Note on Local Mode
+Local mode uses **Ollama**. It is much faster and more memory-efficient than raw transformers for most users. Ensure you have the Ollama service running. You can configure the model in `.env` using `OLLAMA_MODEL=model_name`.
 
 ## 🤝 Contribution
 Contributions are welcome! Please fork the repo and submit a PR for any enhancements or bug fixes.

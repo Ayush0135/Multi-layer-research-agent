@@ -5,8 +5,7 @@ beautifulsoup4
 PyPDF2
 python-dotenv
 termcolor
-torch
-transformers
-accelerate
-hf_transfer
+ollama
 anthropic
+markdown
+xhtml2pdf

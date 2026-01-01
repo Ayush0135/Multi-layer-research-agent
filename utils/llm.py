@@ -32,7 +32,7 @@ def _call_gemini(prompt):
     
     # Simple retry logic for ResourceExhausted or other transient errors
     # Reduced retries for faster failover to other models/offline
-    max_retries = 1 
+    max_retries = 3 
     base_delay = 2
     
     for attempt in range(max_retries):
@@ -98,68 +98,112 @@ def _call_anthropic(prompt):
 
 # --- Main Logic ---
 
-def query_llm_robust(prompt, primary_preference='gemini', use_heavy_fallback=True):
-    """
-    Tries models in a specific order:
-    1. Primary Preference (Gemini or Groq)
-    2. The other of the top 2 (ONLY if use_heavy_fallback is True)
-    3. Anthropic (Backup) (ONLY if use_heavy_fallback is True)
-    4. Offline Model (Last Resort)
-    """
+# --- Stage Configuration ---
+
+# Format: "stage_name": ["model_id_1", "model_id_2"]
+# Model IDs can be: 'groq', 'anthropic', 'gemini', or 'ollama:model_name'
+STAGE_CONFIG = {
+    "default": ["groq", "anthropic", "ollama:llama3.2"],
     
-    # Define availability map
-    strategies = [
-        ('gemini', _call_gemini),
-        ('groq', _call_groq),
-        ('anthropic', _call_anthropic)
-    ]
+    # Fast, Logic Heavy
+    "topic": ["groq", "anthropic", "ollama:llama3.2"],
     
-    # Sort strategies: Primary first, then others
-    if primary_preference == 'groq':
-        # Move groq to front
-        strategies.sort(key=lambda x: 0 if x[0] == 'groq' else 1)
+    # Search filtering (High volume, needs speed)
+    "discovery": ["groq", "ollama:llama3.2"], 
+    
+    # Analysis (Heavy Context, Reasoning)
+    "analysis": [
+        "groq",                      
+        "anthropic",                 
+        "ollama:llama3.2"      
+    ],
+    
+    # Scoring (FAST, strict formatting)
+    "scoring": ["groq", "ollama:llama3.2"],
+    
+    # Synthesis & Generation (Creative, high quality)
+    "synthesis": ["anthropic", "groq", "ollama:llama3.2"],
+    "generation": ["anthropic", "groq", "ollama:llama3.2"]
+}
+
+def _resolve_strategy(model_id):
+    """
+    Returns a callable (function) for a given model_id string.
+    """
+    if model_id == 'groq':
+        return lambda p: _call_groq(p)
+    elif model_id == 'anthropic':
+        return lambda p: _call_anthropic(p)
+    elif model_id == 'gemini':
+         return lambda p: _call_gemini(p)
+    elif model_id.startswith('ollama:'):
+        # Specific offline/cloud model
+        model_name = model_id.split(':', 1)[1]
+        return lambda p: query_offline_llm(p, model_name=model_name)
     else:
-        # Default gemini first
-        strategies.sort(key=lambda x: 0 if x[0] == 'gemini' else 1)
-        
+        # Default to offline if unknown
+        return lambda p: query_offline_llm(p)
+
+def execute_strategies(strategies, prompt):
+    """
+    Executes a list of strategy functions in order.
+    """
     errors = []
-    
-    # 1. Try Online APIs
-    for name, func in strategies:
-        # If we are in 'light' mode (use_heavy_fallback=False), SKIP secondary online models
-        # But ALWAYS try the primary one first.
-        if not use_heavy_fallback and name != primary_preference:
-             continue
-             
+    for i, func in enumerate(strategies):
         try:
-            # print(f"  Attempting {name}...") 
-            return func(prompt)
+             # print(f"  [Strategy {i+1}] Executing...") 
+             return func(prompt)
         except Exception as e:
-            # print(f"  [Warning] {name} failed: {str(e)}")
-            errors.append(f"{name}: {str(e)}")
+            errors.append(str(e))
+            from termcolor import colored
+            
+            error_msg = str(e)
+            if "429" in error_msg or "Rate limit" in error_msg:
+                print(colored(f"  [Limit] Provider rate limited. Switching to backup...", "yellow"))
+            elif "not found" in error_msg.lower():
+                 print(colored(f"  [Config] Key not found/Model missing. Switching...", "yellow"))
+            else:
+                print(colored(f"  [Error] Strategy {i+1} failed: {error_msg[:80]}...", "red"))
+                
+            # print(colored(f"  [Fallback] Transferring context...", "yellow"))
             continue
             
-    # 2. Fallback to Offline
-    # Only print this message once to avoid spamming the console
-    if not hasattr(query_llm_robust, "_has_warned_offline"):
-        print(f"  [System] API(s) failed. Switching to Offline Model (Qwen/Qwen2.5-0.5B-Instruct).")
-        query_llm_robust._has_warned_offline = True
-        
-    return query_offline_llm(prompt)
+    # Fallback to generic offline if enabled and not already tried
+    enable_offline = os.getenv("ENABLE_OFFLINE_FALLBACK", "True").lower() == "true"
+    if enable_offline:
+        try:
+            return query_offline_llm(prompt)
+        except Exception as e:
+            errors.append(f"Offline Default: {e}")
+            
+    raise Exception(f"All strategies failed. Errors: {errors}")
 
+def query_stage(stage, prompt):
+    """
+    Primary Entry Point for Stage-based LLM routing.
+    """
+    # Get config for stage, or default
+    model_chain = STAGE_CONFIG.get(stage, STAGE_CONFIG['default'])
+    
+    # Resolve to functions
+    strategies = [_resolve_strategy(m) for m in model_chain]
+    
+    return execute_strategies(strategies, prompt)
 
-# --- Public Interface (backward compatibility) ---
+# --- Deprecated / Compatibility ---
+
+def query_llm_robust(prompt, primary_preference=None, use_heavy_fallback=True):
+    """
+    Legacy wrapper. Maps to 'default' stage effectively.
+    """
+    return query_stage("default", prompt)
 
 def query_gemini(prompt, retries=1, delay=0, fallback_to_others=False):
-    """
-    Queries Gemini. 
-    If fallback_to_others=False (default for heavy content), goes Gemini -> Offline.
-    If fallback_to_others=True (for scoring/logic), goes Gemini -> Groq -> Anthropic -> Offline.
-    """
-    return query_llm_robust(prompt, primary_preference='gemini', use_heavy_fallback=fallback_to_others)
+    # Map legacy calls to appropriate stages based on fallback flag
+    # If fallback_to_others is False (usually analysis), use 'analysis' stage
+    if not fallback_to_others:
+        return query_stage("analysis", prompt)
+    return query_stage("default", prompt)
 
 def query_groq(prompt, json_mode=False, fallback_to_others=True):
-    """
-    Queries Groq. Defaults to full fallback as it's usually used for scoring.
-    """
-    return query_llm_robust(prompt, primary_preference='groq', use_heavy_fallback=fallback_to_others)
+    return query_stage("scoring", prompt)

@@ -1,5 +1,6 @@
 from utils.llm import query_groq
 import json
+import re
 
 def stage4_academic_scoring(analyzed_documents, topic):
     print("\n--- STAGE 4: ACADEMIC SCORING (Groq) ---")
@@ -42,9 +43,16 @@ def stage4_academic_scoring(analyzed_documents, topic):
         
         response = query_groq(prompt, json_mode=True, fallback_to_others=True)
         try:
-            # clean up potential markdown wrappers even if we asked for strict json
-            cleaned = response.replace("```json", "").replace("```", "").strip()
-            score_data = json.loads(cleaned)
+            # Robust Extraction
+            match = re.search(r'\{.*\}', response, re.DOTALL)
+            if match:
+                json_str = match.group(0)
+                score_data = json.loads(json_str)
+            else:
+                # Fallback to direct load or primitive cleanup
+                cleaned = response.replace("```json", "").replace("```", "").strip()
+                score_data = json.loads(cleaned)
+                
             doc['scoring'] = score_data
             scored_documents.append(doc)
             print(f"  Score: {score_data.get('score')}")

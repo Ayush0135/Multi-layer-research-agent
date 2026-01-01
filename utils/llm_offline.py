@@ -1,106 +1,59 @@
 import os
-import time
-
-# Enable high-performance download for HuggingFace
-os.environ["HF_HUB_ENABLE_HF_TRANSFER"] = "1"
-# details: imports moved to load_offline_model to avoid conflicts
-import warnings
-warnings.filterwarnings("ignore", category=FutureWarning)
+import ollama
+from ollama import Client
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Configuration for offline Hugging Face model
-# Using a smaller model like TinyLlama or similar to ensure it runs on typical consumer hardware without massive downloads.
-# For better performance, the USER can switch to 'microsoft/Phi-3-mini-4k-instruct' or 'Mistral-7B' if they have GPU.
-# Constants
-HF_MODEL_NAME_SMALL = "Qwen/Qwen2.5-0.5B-Instruct"
-HF_MODEL_NAME_LARGE = "Qwen/Qwen2.5-1.5B-Instruct" 
+# Configuration for Ollama
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2")
+OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY")
+# Default to localhost if not set, typical for local runs.
+# Only use https://ollama.com/api if actually intended (which requires keys usually).
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 
-# Active model
-HF_MODEL_NAME = HF_MODEL_NAME_SMALL
-
-# Global variables for lazy loading
-tokenizer = None
-model = None
-pipe = None
-
-def load_offline_model():
-    global tokenizer, model, pipe
-    if pipe is not None:
-        return
-
-    print(f"Loading offline model: {HF_MODEL_NAME}...")
-    print("This runs locally and may take time to download/load the first time.")
-    
-    try:
-        # Lazy imports to avoid mutex/lock conflicts with other libraries (like google-generativeai gRPC)
-        import torch
-        from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-
-        tokenizer = AutoTokenizer.from_pretrained(HF_MODEL_NAME, trust_remote_code=True)
-        
-        # Determine device and dtype
-        device_name = "cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu"
-        device = torch.device(device_name)
-        dtype = torch.float16 if device_name in ["cuda", "mps"] else torch.float32
-        
-        print(f"Using device: {device_name} with dtype: {dtype}")
-
-        # Load model with manual device placement
-        model = AutoModelForCausalLM.from_pretrained(
-            HF_MODEL_NAME, 
-            torch_dtype=dtype, 
-            trust_remote_code=True
-        ).to(device)
-        
-        pipe = pipeline(
-            "text-generation",
-            model=model,
-            tokenizer=tokenizer,
-            max_new_tokens=2048,
-            do_sample=True,
-            temperature=0.7,
-            top_p=0.95,
-            device=device # Pass device to pipeline explicitly
+def get_client():
+    if OLLAMA_API_KEY:
+        # If we have an API key, we use the Client with headers
+        return Client(
+            host=OLLAMA_HOST,
+            headers={
+                'Authorization': f'Bearer {OLLAMA_API_KEY}'
+            }
         )
-        print("Offline model loaded successfully.")
-    except Exception as e:
-        print(f"Error loading offline model: {e}")
-        pipe = None
+    return None # Use default ollama.chat
 
-def query_offline_llm(prompt):
+def query_offline_llm(prompt, model_name=None):
     """
-    Queries the locally loaded Hugging Face model.
-    Loads it strictly on-demand if it hasn't been loaded yet.
+    Queries Ollama (Cloud if API Key present, else local).
     """
-    if pipe is None:
-        load_offline_model()
-        if pipe is None:
-            return "Error: Offline model failed to load."
-
-    # Format prompt for Qwen (ChatML-like)
-    # <|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n
-    messages = [
-        {"role": "system", "content": "You are a helpful research assistant."},
-        {"role": "user", "content": prompt}
-    ]
-    formatted_prompt = tokenizer.apply_chat_template(
-        messages, 
-        tokenize=False, 
-        add_generation_prompt=True
-    )
+    client = get_client()
+    target_model = model_name if model_name else OLLAMA_MODEL
     
     try:
-        outputs = pipe(formatted_prompt)
-        generated_text = outputs[0]['generated_text']
+        messages = [
+            {'role': 'system', 'content': 'You are a helpful research assistant.'},
+            {'role': 'user', 'content': prompt}
+        ]
         
-        # Extract assistant response for Qwen/ChatML format
-        # Usually checking for <|im_start|>assistant
-        if "<|im_start|>assistant" in generated_text:
-            return generated_text.split("<|im_start|>assistant")[-1].strip()
-        return generated_text.strip()
+        if client:
+            response = client.chat(model=target_model, messages=messages)
+        else:
+            response = ollama.chat(model=target_model, messages=messages)
+            
+        return response['message']['content']
     except Exception as e:
-        print(f"Error querying offline model: {e}")
-        return ""
+        error_str = str(e).lower()
+        if "not found" in error_str:
+            return f"Error: Ollama model '{OLLAMA_MODEL}' not found."
+        if "401" in error_str or "unauthorized" in error_str:
+            return "Error: Ollama Cloud API Key is invalid or unauthorized."
+        print(f"Error querying Ollama: {e}")
+        return f"Error: {str(e)}"
 
+if __name__ == "__main__":
+    # Test Ollama
+    mode = "Cloud" if OLLAMA_API_KEY else "Local"
+    print(f"Testing Ollama ({mode}) with model: {OLLAMA_MODEL}")
+    test_response = query_offline_llm("Say hello!")
+    print(f"Response: {test_response}")

@@ -1,5 +1,6 @@
-from utils.llm import query_gemini
+from utils.llm import query_stage
 import json
+import re
 
 def stage6_research_synthesis(knowledge_base, topic):
     print("\n--- STAGE 6: ORIGINAL RESEARCH SYNTHESIS ")
@@ -39,11 +40,19 @@ def stage6_research_synthesis(knowledge_base, topic):
     }}
     """
     
-    # Heavy synthesis: Try Gemini, then fail directly to offline
-    response = query_gemini(prompt, fallback_to_others=False)
+    # Heavy synthesis using 'synthesis' stage strategy
+    response = query_stage("synthesis", prompt)
     try:
-        cleaned = response.replace("```json", "").replace("```", "")
-        synthesis = json.loads(cleaned)
+        # Robust Regex Extraction
+        match = re.search(r'\{.*\}', response, re.DOTALL)
+        if match:
+            json_str = match.group(0)
+            # Use strict=False to allow control characters (newlines in strings)
+            synthesis = json.loads(json_str, strict=False)
+        else:
+            cleaned = response.replace("```json", "").replace("```", "").strip()
+            synthesis = json.loads(cleaned, strict=False)
+            
         return synthesis
     except Exception as e:
         print(f"Error in synthesis: {e}")
